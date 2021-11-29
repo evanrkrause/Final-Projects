@@ -1,0 +1,145 @@
+---
+title: "NYPD Shooting Incident Data (Historic)"
+author: "E. Krause"
+date: "11/3/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+The question I am trying to answer in this project is: What factors play a role in whether or not a shooting incident results in the death of the victim?
+```{r libraries}
+#libraries needed for this project
+library(tidyverse)
+library(lubridate)
+```
+The data I am using is the NYPDs Shooting Incident Data which spans shooting incidents from 2006 to 2020 and contains 23,568 shooting incidents. Included in the data are variables such as the time and date the incident occurred, the location where the incident occurred (longitude and latitude, precinct and borough, X and Y coordinates for NY state Plane system), the age, sex, and race of the both the victim and the perpetrator and whether or not the shooting incident resulted in the death of the victim. 
+```{r import_data, message = FALSE}
+#Import data
+url_in <- 'https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD'
+nypd_shooting_incidents <- read_csv(url_in)
+```
+## Tidying NYPD Data
+```{r tidy_nypd_data}
+#Drop columns we think are unnecessary for analysis
+nypd_shooting_incidents <- nypd_shooting_incidents %>% select(-c(INCIDENT_KEY, X_COORD_CD, Y_COORD_CD, Latitude, Longitude, Lon_Lat))
+
+#Change OCCUR_DATE to be date type, rather than character
+nypd_shooting_incidents$OCCUR_DATE <- mdy(nypd_shooting_incidents$OCCUR_DATE)
+
+#Relabel categories in VIC_RACE and PERP_RACE to shorter labels for graphical use later
+nypd_shooting_incidents$PERP_RACE[nypd_shooting_incidents$PERP_RACE == "AMERICAN INDIAN/ALASKAN NATIVE"] <- 'Amer In/Alaska N'
+nypd_shooting_incidents$VIC_RACE[nypd_shooting_incidents$VIC_RACE == "AMERICAN INDIAN/ALASKAN NATIVE"] <- 'Amer In/Alaska N'
+
+nypd_shooting_incidents$PERP_RACE[nypd_shooting_incidents$PERP_RACE == "ASIAN / PACIFIC ISLANDER"] <- 'A / Pac I'
+nypd_shooting_incidents$VIC_RACE[nypd_shooting_incidents$VIC_RACE == "ASIAN / PACIFIC ISLANDER"] <- 'A / Pac I'
+
+nypd_shooting_incidents$PERP_RACE[nypd_shooting_incidents$PERP_RACE == "BLACK"] <- 'B'
+nypd_shooting_incidents$VIC_RACE[nypd_shooting_incidents$VIC_RACE == "BLACK"] <- 'B'
+
+nypd_shooting_incidents$PERP_RACE[nypd_shooting_incidents$PERP_RACE == "BLACK HISPANIC"] <- 'B + H'
+nypd_shooting_incidents$VIC_RACE[nypd_shooting_incidents$VIC_RACE == "BLACK HISPANIC"] <- 'B + H'
+
+nypd_shooting_incidents$PERP_RACE[nypd_shooting_incidents$PERP_RACE == "WHITE"] <- 'W'
+nypd_shooting_incidents$VIC_RACE[nypd_shooting_incidents$VIC_RACE == "WHITE"] <- 'W'
+
+nypd_shooting_incidents$PERP_RACE[nypd_shooting_incidents$PERP_RACE == "WHITE HISPANIC"] <- 'W + H'
+nypd_shooting_incidents$VIC_RACE[nypd_shooting_incidents$VIC_RACE == "WHITE HISPANIC"] <- 'W + H'
+
+#Check to see if relabelling was successful
+unique(nypd_shooting_incidents$PERP_RACE)
+unique(nypd_shooting_incidents$VIC_RACE)
+```
+Relabel JURISDICTION_CODE to categories listed here: <https://www.opendatanetwork.com/dataset/data.cityofnewyork.us/833y-fsy8> 
+``` {r relabel_nypd_data}
+nypd_shooting_incidents$JURISDICTION_CODE[nypd_shooting_incidents$JURISDICTION_CODE == 0] <- 'Patrol'
+nypd_shooting_incidents$JURISDICTION_CODE[nypd_shooting_incidents$JURISDICTION_CODE == 1] <- 'Transit'
+nypd_shooting_incidents$JURISDICTION_CODE[nypd_shooting_incidents$JURISDICTION_CODE == 2] <- 'Housing'
+```
+## Dealing with NA values
+``` {r d}
+#Check for NA values
+colSums(is.na(nypd_shooting_incidents))
+
+#Since roughly half the entries of LOCATION_DESC are NA we will drop that column
+nypd_shooting_incidents$LOCATION_DESC <- NULL
+
+#Check unique values in PERP_AGE_GROUP, PERP_SEX, and PERP_RACE
+unique(nypd_shooting_incidents$PERP_AGE_GROUP)
+unique(nypd_shooting_incidents$PERP_SEX)
+unique(nypd_shooting_incidents$PERP_RACE)
+
+#Since each group already contains an option of 'UNKNOWN' or 'U', we will replace the NA values in each with Unknown/U
+
+nypd_shooting_incidents$PERP_AGE_GROUP[is.na(nypd_shooting_incidents$PERP_AGE_GROUP)] <- 'UNKNOWN'
+
+nypd_shooting_incidents$PERP_SEX[is.na(nypd_shooting_incidents$PERP_SEX)] <- 'U'
+
+nypd_shooting_incidents$PERP_RACE[is.na(nypd_shooting_incidents$PERP_RACE)] <- 'UNKNOWN'
+
+#Drop the two rows which have NA values for JURISDICTION_CODE
+nypd_shooting_incidents <- nypd_shooting_incidents[!is.na(nypd_shooting_incidents$JURISDICTION_CODE),]
+
+#Verify there are no longer any NA values
+colSums(is.na(nypd_shooting_incidents))
+
+#Summary
+summary(nypd_shooting_incidents)
+```
+## Analysis and Visualization
+```{r visualize_nypd_data}
+#Plot of PERP_RACE and VIC_RACE 
+ggplot(nypd_shooting_incidents, aes(x = PERP_RACE)) + 
+  geom_bar(aes(fill = VIC_RACE), position = "dodge")
+
+#Plot of Shooting Incident counts by Borough split by whether or not the shooting resulted in the victims death
+ggplot(nypd_shooting_incidents, aes(x = BORO)) +
+  geom_bar(aes(fill = STATISTICAL_MURDER_FLAG), position = 'dodge')
+
+#Plot of JURISIDICTION code split by whether or not the shooting resulted in the victims death
+ggplot(nypd_shooting_incidents, aes(x = JURISDICTION_CODE)) +
+  geom_bar(aes(fill = STATISTICAL_MURDER_FLAG), position = 'dodge')
+
+#Create new variables to indicate whether the perp and victim are of the same race, gender, and age_group
+nypd_shooting_incidents$same_RACE <- nypd_shooting_incidents$PERP_RACE == nypd_shooting_incidents$VIC_RACE
+
+nypd_shooting_incidents$same_SEX <- nypd_shooting_incidents$PERP_SEX == nypd_shooting_incidents$VIC_SEX
+
+nypd_shooting_incidents$same_AGE <- nypd_shooting_incidents$PERP_AGE_GROUP == nypd_shooting_incidents$VIC_AGE_GROUP
+
+#Plot the three new variables with STATISTICAL_MURDER_FLAG
+ggplot(nypd_shooting_incidents, aes(x = same_RACE)) +
+  geom_bar(aes(fill = STATISTICAL_MURDER_FLAG), position = 'dodge')
+
+ggplot(nypd_shooting_incidents, aes(x = same_SEX)) +
+  geom_bar(aes(fill = STATISTICAL_MURDER_FLAG), position = 'dodge')
+
+ggplot(nypd_shooting_incidents, aes(x = same_AGE)) +
+  geom_bar(aes(fill = STATISTICAL_MURDER_FLAG), position = 'dodge')
+```
+
+```{r model_nypd_data}
+#Create models for STATISTICAL_MURDER_FLAG in relation to BORO, JURISDICTION_CODE, same_RACE, same_SEX, and same_AGE
+mod.boro = lm(STATISTICAL_MURDER_FLAG~BORO, data = nypd_shooting_incidents)
+summary(mod.boro)
+
+mod.jCode = lm(STATISTICAL_MURDER_FLAG~JURISDICTION_CODE, data = nypd_shooting_incidents)
+summary(mod.jCode)
+
+mod.RACE = lm(STATISTICAL_MURDER_FLAG~same_RACE, data = nypd_shooting_incidents)
+summary(mod.RACE)
+
+mod.SEX = lm(STATISTICAL_MURDER_FLAG~same_SEX, data = nypd_shooting_incidents)
+summary(mod.SEX)
+
+mod.AGE = lm(STATISTICAL_MURDER_FLAG~same_AGE, data = nypd_shooting_incidents)
+summary(mod.AGE)
+
+```
+From these models, we can see that there are statistically significant relationships between 
+each of JURISDICTION_CODE, same_RACE, same_SEX, same_AGE and STATISTICAL_MURDER_FLAG. 
+Specifically, there is a statistically significant relationship between the responding officers being on patrol and the likelihood of the shooting incident resolving in the victims death. Similarly, there is a statistically significant relationship between the perpetrators being the same race/sex/age and the likelihood of the shooting incident resolving in the victims death.
+
+Some potential sources of bias in this analysis include my own personal views on what I believe causes shooting incidents between individuals. This led me to creating the variables same_RACE, same_SEX, and same_AGE because in general I believe that most shooting incidents in which someone is fatally shot were more likely to occur between individuals who knew each other or interacted in some capacity which would be reflected in them possessing similar characteristics: race, sex, or age. 
+
+On the other hand, there could be sources of bias present in how the NYPD data is measured. First, a fair number of the perpetrator data is unknown likely because the perpetrator was not apprehended which could bias our data because we are missing a decent portion of the information in order to determine the demographics of the individuals perpetrating crimes. Likewise, the NYPD data may be biased based on the placement of officers themselves. Because it is likely that more officers will be employed in places with higher crime rates some areas may be over or under policed which could lead to our data misrepresenting the actual locations and demographics of shooting incidences in New York. Likewise, individuals who are distrustful of the NYPD may avoid reporting a shooting or seeking emergency care for a shooting which could, again, lead to the NYPDs shooting incident data being biased as it would mostly include individuals shot who sought medical care, had police called for them, or were otherwise unable to resolve their situation without police involvement.
