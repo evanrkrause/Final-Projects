@@ -1,0 +1,332 @@
+---
+title: "Reproducible Report on COVID19 Data"
+author: "E. Krause"
+date: "11/29/2021"
+output: 
+  pdf_document: default
+  html_document: default
+---
+The goal of this project is to examine global and US data to determine if the relationship between number of cases and number of deaths is the same.
+```{r libraries}
+#libraries needed for this project
+library(tidyverse)
+library(lubridate)
+```
+
+```{r get_jhu_data}
+#Set filenames
+url_in <- 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/'
+file_names <- c('time_series_covid19_confirmed_US.csv',
+'time_series_covid19_confirmed_global.csv',
+'time_series_covid19_deaths_US.csv',
+'time_series_covid19_deaths_global.csv')
+urls <-str_c(url_in, file_names)
+```
+
+```{r import_data, message=FALSE}
+#Import data
+global_cases <- read_csv(urls[2])
+global_deaths <- read_csv(urls[4])
+us_cases <- read_csv(urls[1])
+us_deaths <- read_csv(urls[3])
+```
+
+```{r tidy_global_data}
+#Tidy global cases, deaths, and recovered
+global_cases <- global_cases %>% 
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long), names_to = 'date', values_to = 'cases') %>%
+  select(-c(Lat,Long))
+
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long), names_to = 'date', values_to = 'deaths') %>%
+  select(-c(Lat,Long))
+
+
+#Join global_cases, global_deaths, and global_recovered into one variable: global
+global <- global_cases %>%
+full_join(global_deaths) %>%
+  rename(Country_Region = 'Country/Region',
+         Province_State = 'Province/State') %>%
+  mutate(date = mdy(date))
+
+#Remove all instances with cases <= 0
+global <- global %>% filter(cases >0)
+
+#Create a combined Key
+global <- global %>%
+  unite('Combined Key',
+        c(Province_State, Country_Region),
+        sep = ',',
+        na.rm = TRUE,
+        remove = FALSE)
+
+#Get population data
+uid_lookup_url <- 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv'
+uid <- read_csv(uid_lookup_url) %>%
+  select(-c(Lat, Long_, code3, iso2, iso3, Admin2))
+
+#Combine population data with global data
+global <- global %>%
+  left_join(uid, by = c('Province_State', 'Country_Region')) %>%
+  select(-c(UID, FIPS)) %>%
+  select(Province_State, Country_Region, date, cases, deaths, Population, Combined_Key)
+```
+
+```{r tidy us_data}
+#Repeat same process with US data
+us_cases <- us_cases %>%
+  pivot_longer(cols = -(UID:Combined_Key), 
+               names_to = 'date', 
+               values_to = 'cases') %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+us_deaths <- us_deaths %>%
+  pivot_longer(cols = -(UID:Population),
+               names_to = 'date',
+               values_to = 'deaths') %>%
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+#Combine us_cases and us_deaths into US
+US <- us_cases %>%
+  full_join(us_deaths)
+```
+
+```{r us_visualization}
+#Group cases and deaths by state
+US_by_state <- US %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths*1000000 / Population) %>%
+  select(Province_State, Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+#Total US cases and deaths
+US_totals <- US_by_state %>%
+  group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+             Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+#Total US cases and deaths by state
+US_totals_by_state <- US_by_state %>%
+  group_by(Province_State, date) %>%
+  filter(Population > 0) %>%
+  summarize(cases = max(cases), deaths = max(deaths),
+             Population = max(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population,
+         cases_per_mill = cases * 1000000 / Population) %>%
+  select(Province_State, date, cases, cases_per_mill, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+#Plot US totals
+US_totals %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=date, y = cases)) +
+  geom_line(aes(color = 'cases')) +
+  geom_point(aes(color = 'cases')) +
+  geom_line(aes(y = deaths, color = 'deaths')) +
+  geom_point(aes(y = deaths, color = 'deaths')) +
+  scale_y_log10() +
+  theme(legend.position = 'bottom',
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = 'COVID19 in US', y = NULL)
+#Plot cases and deaths for the state of California
+state <- 'California'
+US_by_state %>%
+  filter(Province_State == state) %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=date, y = cases)) +
+  geom_line(aes(color = 'cases')) +
+  geom_point(aes(color = 'cases')) +
+  geom_line(aes(y = deaths, color = 'deaths')) +
+  geom_point(aes(y = deaths, color = 'deaths')) +
+  scale_y_log10() +
+  theme(legend.position = 'bottom',
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c('COVID19 in ', state), y = NULL)
+#Plot case and death totals for each State
+US_totals_by_state %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=Province_State, y = cases)) +
+  geom_line(aes(color = 'cases')) +
+  geom_point(aes(color = 'cases')) +
+  geom_line(aes(y = deaths, color = 'deaths')) +
+  geom_point(aes(y = deaths, color = 'deaths')) +
+  scale_y_log10() +
+  theme(legend.position = 'bottom',
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = 'COVID19 totals by state', y = NULL)
+#Adjust US_by_state and US_totals to account for lag to get new cases and deaths
+US_by_state <- US_by_state %>%
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths))
+US_totals <- US_totals %>%
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths))
+#Replot US_totals with new cases and deaths
+US_totals %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=date, y = new_cases)) +
+  geom_line(aes(color = 'new_cases')) +
+  geom_point(aes(color = 'new_cases')) +
+  geom_line(aes(y = new_deaths, color = 'new_deaths')) +
+  geom_point(aes(y = new_deaths, color = 'new_deaths')) +
+  scale_y_log10() +
+  theme(legend.position = 'bottom',
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = 'New COVID19 total cases and deaths in US', y = NULL)
+#Replot new cases and deaths for the state of California
+state <- 'California'
+US_by_state %>%
+  filter(Province_State == state) %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=date, y = new_cases)) +
+  geom_line(aes(color = 'new_cases')) +
+  geom_point(aes(color = 'new_cases')) +
+  geom_line(aes(y = new_deaths, color = 'new_deaths')) +
+  geom_point(aes(y = new_deaths, color = 'new_deaths')) +
+  scale_y_log10() +
+  theme(legend.position = 'bottom',
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c('New COVID19 cases and deaths in ', state), y = NULL)
+
+```
+
+```{r global_visualization}
+#Group cases and deaths by country
+Global_by_country <- global %>%
+  group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths*1000000 / Population) %>%
+  select(Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+#Total global cases and deaths
+Global_totals <- Global_by_country %>%
+  group_by(date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+             Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+#Total global cases and deaths by country
+Global_totals_by_country <- Global_by_country %>%
+  filter(Population > 0) %>%
+  group_by(Country_Region, date) %>%
+  summarize(cases = max(cases), deaths = max(deaths),
+             Population = max(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population,
+         cases_per_mill = cases * 1000000 / Population) %>%
+  select(Country_Region, date, cases, cases_per_mill, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+
+#Plot global total cases and deaths
+Global_totals %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=date, y = cases)) +
+  geom_line(aes(color = 'cases')) +
+  geom_point(aes(color = 'cases')) +
+  geom_line(aes(y = deaths, color = 'deaths')) +
+  geom_point(aes(y = deaths, color = 'deaths')) +
+  scale_y_log10() +
+  theme(legend.position = 'bottom',
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = 'Global COVID19', y = NULL)
+#Plot cases and deaths for Germany
+country <- 'Germany'
+Global_by_country %>%
+  filter(Country_Region == country) %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=date, y = cases)) +
+  geom_line(aes(color = 'cases')) +
+  geom_point(aes(color = 'cases')) +
+  geom_line(aes(y = deaths, color = 'deaths')) +
+  geom_point(aes(y = deaths, color = 'deaths')) +
+  scale_y_log10() +
+  theme(legend.position = 'bottom',
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c('COVID19 in ', country), y = NULL)
+
+#Plot total cases and deaths for each country
+Global_totals_by_country %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=Country_Region, y = cases)) +
+  geom_line(aes(color = 'cases')) +
+  geom_point(aes(color = 'cases')) +
+  geom_line(aes(y = deaths, color = 'deaths')) +
+  geom_point(aes(y = deaths, color = 'deaths')) +
+  scale_y_log10() +
+  theme(legend.position = 'bottom',
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = 'COVID19 totals by Country', y = NULL)
+#Adjust Global_by_country and Global_totals to show new cases and deaths
+Global_by_country <- Global_by_country %>%
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths))
+Global_totals <- Global_totals %>%
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths))
+#Replot Global_totals using new cases and deaths
+Global_totals %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=date, y = new_cases)) +
+  geom_line(aes(color = 'new_cases')) +
+  geom_point(aes(color = 'new_cases')) +
+  geom_line(aes(y = new_deaths, color = 'new_deaths')) +
+  geom_point(aes(y = new_deaths, color = 'new_deaths')) +
+  scale_y_log10() +
+  theme(legend.position = 'bottom',
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = 'New Global COVID19 cases and deaths ', y = NULL)
+#Replot new cases and deaths for Germany
+country <- 'Germany'
+Global_by_country %>%
+  filter(Country_Region == country) %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=date, y = new_cases)) +
+  geom_line(aes(color = 'new_cases')) +
+  geom_point(aes(color = 'new_cases')) +
+  geom_line(aes(y = new_deaths, color = 'new_deaths')) +
+  geom_point(aes(y = new_deaths, color = 'new_deaths')) +
+  scale_y_log10() +
+  theme(legend.position = 'bottom',
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c('COVID19 in ', country), y = NULL)
+```
+
+```{r us_modelling}
+#Create a basic model linking cases per million and deaths per million in the US
+mod <- lm(deaths_per_mill ~ cases_per_mill, data = US_totals_by_state)
+summary(mod)
+
+US_total_W_pred <- US_totals_by_state %>% mutate(pred_deaths_per_mill = predict(mod))
+#Plot the models predictions against our data
+US_total_W_pred %>% ggplot() +
+  geom_point(aes(x = cases_per_mill, y = deaths_per_mill), color = 'blue') +
+  geom_point(aes(x = cases_per_mill, y = pred_deaths_per_mill), color = 'red')
+
+
+```
+
+```{r global_modelling}
+#Create a basic model linking cases per million and deaths per million globally
+mod <- lm(deaths_per_mill ~ cases_per_mill, data = Global_totals_by_country)
+summary(mod)
+
+Global_total_W_pred <- Global_totals_by_country %>% mutate(pred_deaths_per_mill = predict(mod))
+#Plot the models predictions against our actual data
+Global_total_W_pred %>% ggplot() +
+  geom_point(aes(x = cases_per_mill, y = deaths_per_mill), color = 'blue') +
+  geom_point(aes(x = cases_per_mill, y = pred_deaths_per_mill), color = 'red')
+
+``` 
+
+From these models, we can see that in both the US and Global data, there is a statistically significant relationship between cases per million and deaths per million. Logically, this makes complete sense as there being more cases should almost always lead to more deaths from any disease. From the models, it's also clear that some states and countries had worse efforts dealing with COVID 19 while some did better. There are very clear groups of data significantly above and below the prediction lines in both cases. This indicates that, although the US and Global models had Adjusted R-squareds of 0.791 and 0.6046, this model may not be that useful in explaining what is actually occurring. It may be necessary to split the data based on State or Country or to add more variables and more data in order to make a model that better explains deaths per million causes by COVID 19.
+
+Some potential sources of bias in this model include, but are not limited to, my personal understanding of diseases as well as the way the data was recorded. My personal understanding of the spread and mortality rates of infectious diseases led me to believe there would be a strong correlation between number of cases and number of deaths. As a result, I focused on this relationship rather than exploring other factors which could influence number of deaths which might have made a stronger model. 
+
+Similarly, the data itself may be inaccurate and there is no guarantee that each State or Countries COVID data is reported in the same way. For example, a number of deaths that were due to COVID 19 were not listed as COVID 19 deaths in states such as California during the pandemic. Instead they were listed as deaths caused by other health issues that the individual suffered. Thus, for many US States, the true number of deaths is likely larger than the number present in the data. Likewise, there is likely to be many individuals who had COVID who are not included in the cases value because they either did not get tested because of their circumstances (such as being afraid they would have to miss work should they test positive and thus lose income) or because they were simply asymptomatic and thus had no reason to believe they needed to be tested. On the other hand, there was no global standard for COVID data collection and reporting which means that each Country and State chose whatever method they believed to be correct. Some of them could've chosen the same criteria but there is no guarantee. This could introduce inherent bias into our data since how a Country or State choses to report their data could directly influence whether their cases and deaths are over or underrepresented.
