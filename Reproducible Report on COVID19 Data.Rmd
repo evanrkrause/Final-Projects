@@ -12,7 +12,7 @@ The goal of this project is to examine global and US data to determine if the re
 library(tidyverse)
 library(lubridate)
 ```
-
+The data used here is from Johns Hopkins University and contains time series tables for the US and Globally for confirmed cases and deaths from COVID-19. The data is updated once per day around 23:59 UTC.
 ```{r get_jhu_data}
 #Set filenames
 url_in <- 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/'
